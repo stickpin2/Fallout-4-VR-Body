@@ -3,8 +3,10 @@
 #include "f4se/GameReferences.h"
 #include "f4se/NiNodes.h"
 #include "f4se/GameSettings.h"
-
+#include "f4se/GameRTTI.h"
 #include "matrix.h"
+#include "Offsets.h"
+#include "F4VRBody.h"
 
 #include <chrono>
 
@@ -16,12 +18,12 @@ namespace F4VRBody {
 	typedef void* (*_AIProcess_CreateMuzzleFlash)(Actor::MiddleProcess* middleProcess, uint64_t projectile, Actor* actor);
 	extern RelocAddr<_AIProcess_CreateMuzzleFlash> AIProcess_CreateMuzzleFlash;
 
-	float vec3_len(NiPoint3 v1);
+	float vec3_len(const NiPoint3& v1);
 	NiPoint3 vec3_norm(NiPoint3 v1);
 
-	float vec3_dot(NiPoint3 v1, NiPoint3 v2);
+	float vec3_dot(const NiPoint3& v1, const NiPoint3& v2);
 
-	NiPoint3 vec3_cross(NiPoint3 v1, NiPoint3 v2);
+	NiPoint3 vec3_cross(const NiPoint3& v1, const NiPoint3& v2);
 
 	float vec3_det(NiPoint3 v1, NiPoint3 v2, NiPoint3 n);
 
@@ -38,6 +40,19 @@ namespace F4VRBody {
 	void updateTransformsDown(NiNode* nde, bool updateSelf);
 
 	void toggleVis(NiNode* nde, bool hide, bool updateSelf);
+
+	void SetINIBool(BSFixedString name, bool value);
+	void SetINIFloat(BSFixedString name, float value);
+	//void SetINIInt(BSFixedString name, int value);
+
+	void TurnPlayerRadioOn(bool isActive);
+	void SimulateExtendedButtonPress(WORD vkey);
+	void RightStickXSleep(int time);
+	void RightStickYSleep(int time);
+	void SecondaryTriggerSleep(int time);
+	//void PipboyReopen();
+	void ShowMessagebox(std::string asText);
+	void ShowNotification(std::string asText);
 
 	void turnPipBoyOn();
 	void turnPipBoyOff();

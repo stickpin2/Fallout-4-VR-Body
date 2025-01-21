@@ -1,5 +1,6 @@
 #include "utils.h"
 #include <algorithm>
+#include "f4se/PapyrusEvents.h"
 
 #define PI 3.14159265358979323846
 
@@ -11,49 +12,44 @@ namespace F4VRBody {
 	typedef Setting* (*_SettingCollectionList_GetPtr)(SettingCollectionList* list, const char* name);
 	RelocAddr<_SettingCollectionList_GetPtr> SettingCollectionList_GetPtr(0x501500);
 
-	float vec3_len(NiPoint3 v1) {
+    float vec3_len(const NiPoint3& v1) {
+        return sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
+    }
 
-		return sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
-	}
+    NiPoint3 vec3_norm(NiPoint3 v1) {
+        double mag = vec3_len(v1);
 
-	NiPoint3 vec3_norm(NiPoint3 v1) {
+        if (mag < 0.000001) {
+            float maxX = abs(v1.x);
+            float maxY = abs(v1.y);
+            float maxZ = abs(v1.z);
 
-		double mag = vec3_len(v1);
+            if (maxX >= maxY && maxX >= maxZ) {
+                return (v1.x >= 0 ? NiPoint3(1, 0, 0) : NiPoint3(-1, 0, 0));
+            } else if (maxY > maxZ) {
+                return (v1.y >= 0 ? NiPoint3(0, 1, 0) : NiPoint3(0, -1, 0));
+            }
+            return (v1.z >= 0 ? NiPoint3(0, 0, 1) : NiPoint3(0, 0, -1));
+        }
 
-		if (mag < 0.000001) {
-			float maxX = abs(v1.x);
-			float maxY = abs(v1.y);
-			float maxZ = abs(v1.z);
+        v1.x /= mag;
+        v1.y /= mag;
+        v1.z /= mag;
 
-			if (maxX >= maxY && maxX >= maxZ) {
-				return (v1.x >= 0 ? NiPoint3(1, 0, 0) : NiPoint3(-1, 0, 0));
-			}
-			else if (maxY > maxZ) {
-				return (v1.y >= 0 ? NiPoint3(0, 1, 0) : NiPoint3(0, -1, 0));
-			}
-			return (v1.z >= 0 ? NiPoint3(0, 0, 1) : NiPoint3(0, 0, -1));
+        return v1;
+    }
 
-		}
-		v1.x /= mag;
-		v1.y /= mag;
-		v1.z /= mag;
-
-		return v1;
-	}
-
-	float vec3_dot(NiPoint3 v1, NiPoint3 v2) {
+	float vec3_dot(const NiPoint3& v1, const NiPoint3& v2) {
 		return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
 	}
 
-	NiPoint3 vec3_cross(NiPoint3 v1, NiPoint3 v2) {
-		NiPoint3 crossP;
-
-		crossP.x = v1.y * v2.z - v1.z * v2.y;
-		crossP.y = v1.z * v2.x - v1.x * v2.z;
-		crossP.z = v1.x * v2.y - v1.y * v2.x;
-
-		return crossP;
-	}
+    NiPoint3 vec3_cross(const NiPoint3& v1, const NiPoint3& v2) {
+        return NiPoint3(
+            v1.y * v2.z - v1.z * v2.y,
+            v1.z * v2.x - v1.x * v2.z,
+            v1.x * v2.y - v1.y * v2.x
+        );
+    }
 	
 	// the determinant is proportional to the sin of the angle between two vectors.   In 3d case find the sin of the angle between v1 and v2
 	// along their angle of rotation with unit vector n
@@ -116,64 +112,120 @@ namespace F4VRBody {
 		return result.Transpose();
 	}
 
-	void updateTransforms(NiNode* node) {
-		if (!node->m_parent) {
-			return;
-		}
-		NiPoint3 pos = node->m_localTransform.pos;
+    void updateTransforms(NiNode* node) {
+        if (!node->m_parent) {
+            return;
+        }
 
-		pos = (node->m_parent->m_worldTransform.rot * (pos * node->m_parent->m_worldTransform.scale));
+        const auto& parentTransform = node->m_parent->m_worldTransform;
+        const auto& localTransform = node->m_localTransform;
 
-		node->m_worldTransform.pos = node->m_parent->m_worldTransform.pos + pos;
-		
-		Matrix44 loc;
-		loc.makeTransformMatrix(node->m_localTransform.rot, NiPoint3(0, 0, 0));
+        // Calculate world position
+        NiPoint3 pos = parentTransform.rot * (localTransform.pos * parentTransform.scale);
+        node->m_worldTransform.pos = parentTransform.pos + pos;
 
-		node->m_worldTransform.rot = loc.multiply43Left(node->m_parent->m_worldTransform.rot);
+        // Calculate world rotation
+        Matrix44 loc;
+        loc.makeTransformMatrix(localTransform.rot, NiPoint3(0, 0, 0));
+        node->m_worldTransform.rot = loc.multiply43Left(parentTransform.rot);
 
-		node->m_worldTransform.scale = node->m_parent->m_worldTransform.scale * node->m_localTransform.scale;
-		return;
-	 }
+        // Calculate world scale
+        node->m_worldTransform.scale = parentTransform.scale * localTransform.scale;
+    }
 
-	void updateTransformsDown(NiNode* nde, bool updateSelf) {
-		NiAVObject::NiUpdateData* ud = nullptr;
+    void updateTransformsDown(NiNode* nde, bool updateSelf) {
+        if (updateSelf) {
+            updateTransforms(nde);
+        }
 
-		if (updateSelf) {
-			//			nde->UpdateWorldData(ud);
-			updateTransforms(nde);
-		}
+        for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
+            if (auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr) {
+                updateTransformsDown(nextNode, true);
+            } else if (auto triNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsBSTriShape() : nullptr) {
+                updateTransforms(reinterpret_cast<NiNode*>(triNode));
+            }
+        }
+    }
 
-		for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
-			auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr;
-			if (nextNode) {
-				updateTransformsDown(nextNode, true);
-			}
-			auto triNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsBSTriShape() : nullptr;
-			if (triNode) {
-				updateTransforms((NiNode*)triNode);
+    void toggleVis(NiNode* nde, bool hide, bool updateSelf) {
+        if (updateSelf) {
+            nde->flags = hide ? (nde->flags | 0x1) : (nde->flags & ~0x1);
+        }
+
+        for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
+            if (auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr) {
+                toggleVis(nextNode, hide, true);
+            }
+        }
+    }
+
+	void SetINIBool(BSFixedString name, bool value) {
+		CallGlobalFunctionNoWait2<BSFixedString, bool>("Utility", "SetINIBool", BSFixedString(name.c_str()), value);
+	}
+
+	void SetINIFloat(BSFixedString name, float value) {
+		CallGlobalFunctionNoWait2<BSFixedString, float>("Utility", "SetINIFloat", BSFixedString(name.c_str()), value);
+	}
+
+	void ShowMessagebox(std::string asText) {
+		CallGlobalFunctionNoWait1<BSFixedString>("Debug", "Messagebox", BSFixedString(asText.c_str()));
+	}
+
+	void ShowNotification(std::string asText) {
+		CallGlobalFunctionNoWait1<BSFixedString>("Debug", "Notification", BSFixedString(asText.c_str()));
+	}
+
+	void TurnPlayerRadioOn(bool isActive) {
+		CallGlobalFunctionNoWait1<bool>("Game", "TurnPlayerRadioOn", isActive);
+	}
+
+	void SimulateExtendedButtonPress(WORD vkey)
+	{
+		HWND hwnd = ::FindWindowEx(0, 0, "Fallout4VR", 0);
+		if (hwnd)
+		{
+			HWND foreground = GetForegroundWindow();
+			if (foreground && hwnd == foreground)
+			{
+				INPUT input;
+				input.type = INPUT_KEYBOARD;
+				input.ki.wScan = MapVirtualKey(vkey, MAPVK_VK_TO_VSC);
+				input.ki.time = 0;
+				input.ki.dwExtraInfo = 0;
+				input.ki.wVk = vkey;
+				if (vkey == VK_UP || vkey == VK_DOWN) {
+				input.ki.dwFlags = KEYEVENTF_EXTENDEDKEY;//0; //KEYEVENTF_KEYDOWN
+				}
+				else {
+					input.ki.dwFlags = 0;
+				}
+				SendInput(1, &input, sizeof(INPUT));
+				Sleep(30);
+				if (vkey == VK_UP || vkey == VK_DOWN) {
+					input.ki.dwFlags = KEYEVENTF_KEYUP | KEYEVENTF_EXTENDEDKEY;
+				}
+				else {
+					input.ki.dwFlags = KEYEVENTF_KEYUP;
+				}
+				SendInput(1, &input, sizeof(INPUT));
 			}
 		}
 	}
 
-	void toggleVis(NiNode* nde, bool hide, bool updateSelf) {
-
-		if (updateSelf) {
-			if (hide) {
-				nde->flags |= 0x1;
-			}
-			else {
-				nde->flags &= 0xfffffffffffffffe;
-			}
-		}
-
-		for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
-			auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr;
-			if (nextNode) {
-				toggleVis((NiNode*)nextNode, hide, true);
-			}
-		}
+	void RightStickXSleep(int time) { // Prevents Continous Input from Right Stick X Axis
+		Sleep(time);
+		_controlSleepStickyX = false;
 	}
 
+	void RightStickYSleep(int time) { // Prevents Continous Input from Right Stick Y Axis
+		Sleep(time);
+		_controlSleepStickyY = false;
+	}
+
+	void SecondaryTriggerSleep(int time) { // Used to determine if secondary trigger received a long or short press 
+		Sleep(time);
+		_controlSleepStickyT = false;
+	}
 
 	void turnPipBoyOn() {
 /*  From IdleHands
@@ -213,6 +265,10 @@ namespace F4VRBody {
 
 		set = GetINISetting("fPipboyScaleInnerAngle:VRPipboy");
 		set->SetDouble(5.0);
+		if (!c_repositionMasterMode) {
+			SetINIFloat("fDirectionalDeadzone:Controls", c_DirectionalDeadzone);  //restores player rotation to right stick
+		}
+
 	}
 
 	bool getLeftHandedMode() {
@@ -221,44 +277,36 @@ namespace F4VRBody {
 		return set->data.u8;
 	 }
 
-	NiNode* getChildNode(const char* nodeName, NiNode* nde) {
+    NiNode* getChildNode(const char* nodeName, NiNode* nde) {
+        if (!nde->m_name) {
+            return nullptr;
+        }
 
-		if (!nde->m_name) {
-			return nullptr;
-		}
+        if (!_stricmp(nodeName, nde->m_name.c_str())) {
+            return nde;
+        }
 
-		if (!_stricmp(nodeName, nde->m_name.c_str())) {
-			return nde;
-		}
+        for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
+            if (auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr) {
+                if (auto ret = getChildNode(nodeName, nextNode)) {
+                    return ret;
+                }
+            }
+        }
 
-		NiNode* ret = nullptr;
+        return nullptr;
+    }
 
-		for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
-			auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr;
-			if (nextNode) {
-				ret = getChildNode(nodeName, nextNode);
-				if (ret) {
-					return ret;
-				}
-			}
-		}
-
-		return nullptr;
-	}
-
-	NiNode* get1stChildNode(const char* nodeName, NiNode* nde) {
-
-		for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
-			auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr;
-			if (nextNode) {
-				if (!_stricmp(nodeName, nextNode->m_name.c_str())) {
-					return nextNode;
-				}
-			}
-		}
-
-		return nullptr;
-	}
+    NiNode* get1stChildNode(const char* nodeName, NiNode* nde) {
+        for (auto i = 0; i < nde->m_children.m_emptyRunStart; ++i) {
+            if (auto nextNode = nde->m_children.m_data[i] ? nde->m_children.m_data[i]->GetAsNiNode() : nullptr) {
+                if (!_stricmp(nodeName, nextNode->m_name.c_str())) {
+                    return nextNode;
+                }
+            }
+        }
+        return nullptr;
+    }
 
 	Setting* GetINISettingNative(const char* name)
 	{
